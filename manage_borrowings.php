@@ -299,28 +299,88 @@ if (isset($_POST['update_borrowing'])) {
 // --- LOGIC: RETURN EQUIPMENT ---
 if (isset($_POST['return_equipment'])) {
     $id = $_POST['borrowing_id'];
+    $return_date = $_POST['return_date'];
     
     try {
         $pdo->beginTransaction();
         
         // ดึงข้อมูลการยืม
-        $stmt = $pdo->prepare("SELECT equipment_id FROM borrowings WHERE id = ?");
+        $stmt = $pdo->prepare("SELECT equipment_id, quantity FROM borrowings WHERE id = ?");
         $stmt->execute([$id]);
         $borrowing = $stmt->fetch();
         
         // อัปเดตสถานะการยืม
-        $stmt = $pdo->prepare("UPDATE borrowings SET status = 'returned', return_date = NOW() WHERE id = ?");
-        $stmt->execute([$id]);
+        $stmt = $pdo->prepare("UPDATE borrowings SET status = 'returned', return_date = ? WHERE id = ?");
+        $stmt->execute([$return_date, $id]);
         
         // เพิ่มจำนวนอุปกรณ์กลับคลัง
-        $stmt = $pdo->prepare("UPDATE equipment SET quantity = quantity + 1 WHERE id = ?");
-        $stmt->execute([$borrowing['equipment_id']]);
+        $stmt = $pdo->prepare("UPDATE equipment SET quantity = quantity + ? WHERE id = ?");
+        $stmt->execute([$borrowing['quantity'], $borrowing['equipment_id']]);
         
         $pdo->commit();
         $alertScript = "Swal.fire('สำเร็จ', 'คืนอุปกรณ์เรียบร้อยแล้ว', 'success');";
     } catch (Exception $e) {
         $pdo->rollBack();
         $alertScript = "Swal.fire('ข้อผิดพลาด', 'ไม่สามารถคืนอุปกรณ์ได้: " . $e->getMessage() . "', 'error');";
+    }
+}
+
+// --- LOGIC: BORROW EQUIPMENT ---
+if (isset($_POST['borrow_equipment'])) {
+    $user_id = $_POST['user_id'];
+    $borrow_date = $_POST['borrow_date'];
+    $items = $_POST['equipment'] ?? [];
+    
+    $isAjax = isset($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) === 'xmlhttprequest';
+    
+    if (empty($items)) {
+        $message = ['success' => false, 'message' => 'กรุณาเลือกอุปกรณ์ที่ต้องการยืม'];
+    } elseif (strtotime($borrow_date) < strtotime(date('Y-m-d'))) {
+        $message = ['success' => false, 'message' => 'ไม่สามารถเลือกวันที่ย้อนหลังได้'];
+    } else {
+        $pdo->beginTransaction();
+        try {
+            foreach ($items as $item) {
+                $equipment_id = $item['id'];
+                $quantity = (int)$item['quantity'];
+                
+                if ($quantity <= 0) continue;
+                
+                // เช็กจำนวนคงเหลือ
+                $stmt = $pdo->prepare("SELECT quantity FROM equipment WHERE id = ?");
+                $stmt->execute([$equipment_id]);
+                $available = $stmt->fetchColumn();
+                
+                if ($quantity > $available) {
+                    throw new Exception("อุปกรณ์ {$equipment_id} มีไม่พอ");
+                }
+                
+                // สร้างการยืม (อนุมัติทันทีสำหรับ admin)
+                $stmt = $pdo->prepare("INSERT INTO borrowings (user_id, equipment_id, quantity, borrow_date, status, approval_status, approved_by, approved_at) VALUES (?, ?, ?, ?, 'borrowed', 'approved', ?, NOW())");
+                $stmt->execute([$user_id, $equipment_id, $quantity, $borrow_date, $_SESSION['user_id']]);
+                
+                // ตัดสต็อก
+                $stmt = $pdo->prepare("UPDATE equipment SET quantity = quantity - ? WHERE id = ?");
+                $stmt->execute([$quantity, $equipment_id]);
+            }
+            $pdo->commit();
+            $message = ['success' => true, 'message' => 'ยืมอุปกรณ์เรียบร้อยแล้ว'];
+        } catch (Exception $e) {
+            $pdo->rollBack();
+            $message = ['success' => false, 'message' => 'ไม่สามารถยืมอุปกรณ์ได้: ' . $e->getMessage()];
+        }
+    }
+    
+    if ($isAjax) {
+        header('Content-Type: application/json');
+        echo json_encode($message);
+        exit;
+    } else {
+        if ($message['success']) {
+            $alertScript = "Swal.fire('สำเร็จ', '" . $message['message'] . "', 'success').then(() => location.reload());";
+        } else {
+            $alertScript = "Swal.fire('ข้อผิดพลาด', '" . $message['message'] . "', 'error');";
+        }
     }
 }
 
@@ -636,6 +696,9 @@ if (isset($_POST['restore_borrowing'])) {
                             <p class="text-gray-600">แก้ไข อนุมัติ และจัดการข้อมูลการยืม-คืนอุปกรณ์</p>
                         </div>
                         <div class="flex items-center gap-3">
+                            <button onclick="showBorrowModal()" class="bg-gradient-to-r from-green-500 to-green-600 text-white px-6 py-3 rounded-xl font-medium shadow-lg hover:from-green-600 transition-all">
+                                <i class="bi bi-plus-circle mr-2"></i> ยืมอุปกรณ์
+                            </button>
                             <button onclick="showTrashModal()" class="bg-gradient-to-r from-red-500 to-red-600 text-white px-6 py-3 rounded-xl font-medium shadow-lg hover:from-red-600 transition-all">
                                 <i class="bi bi-trash3 mr-2"></i> ถังขยะ
                             </button>
@@ -809,7 +872,12 @@ if (isset($_POST['restore_borrowing'])) {
             <form id="returnForm" action="" method="POST" class="p-6">
                 <input type="hidden" name="borrowing_id" id="returnBorrowingId">
                 <div class="mb-6">
-                    <p class="text-gray-700 mb-4">คุณต้องการคืนอุปกรณ์นี้ใช่หรือไม่?</p>
+                    <label class="block text-sm font-semibold text-gray-700 mb-2">วันที่คืน</label>
+                    <input type="date" name="return_date" id="returnDate" required 
+                        class="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-green-500/20"
+                        value="<?php echo date('Y-m-d'); ?>">
+                </div>
+                <div class="mb-6">
                     <div class="bg-yellow-50 border border-yellow-200 rounded-xl p-4">
                         <p class="text-sm text-yellow-800">
                             <i class="bi bi-info-circle mr-2"></i>
@@ -869,6 +937,68 @@ if (isset($_POST['restore_borrowing'])) {
                     </button>
                 </div>
             </div>
+        </div>
+    </div>
+
+    <!-- Borrow Equipment Modal -->
+    <div id="borrowModal" class="hidden fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+        <div class="bg-white rounded-3xl w-full max-w-4xl animate__animated animate__zoomIn animate__faster max-h-[90vh] overflow-y-auto">
+            <div class="p-6 border-b flex justify-between items-center bg-gradient-to-r from-green-50 to-emerald-50">
+                <h3 class="text-xl font-bold gradient-text">ยืมอุปกรณ์</h3>
+                <button onclick="toggleModal('borrowModal')" class="text-gray-400 hover:text-gray-600 transition-colors">
+                    <i class="bi bi-x-lg text-xl"></i>
+                </button>
+            </div>
+            <form id="borrowForm" action="" method="POST" class="p-6">
+                <div class="mb-6">
+                    <label class="block text-sm font-semibold text-gray-700 mb-2">เลือกผู้ยืม</label>
+                    <select name="user_id" id="borrowUser" required class="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-green-500/20">
+                        <option value="">เลือกผู้ยืม...</option>
+                        <?php
+                        $users = $pdo->query("SELECT id, username, first_name, last_name FROM users WHERE role = 'user'")->fetchAll();
+                        foreach ($users as $user) {
+                            $name = $user['first_name'] . ' ' . $user['last_name'] ?: $user['username'];
+                            echo "<option value='{$user['id']}'>" . htmlspecialchars($name) . "</option>";
+                        }
+                        ?>
+                    </select>
+                </div>
+                <div class="mb-6">
+                    <label class="block text-sm font-semibold text-gray-700 mb-2">วันที่ยืม</label>
+                    <input type="date" name="borrow_date" id="borrowDate" required 
+                        class="w-full p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:ring-2 focus:ring-green-500/20"
+                        min="<?php echo date('Y-m-d'); ?>">
+                </div>
+                <div class="mb-6">
+                    <label class="block text-sm font-semibold text-gray-700 mb-2">เลือกอุปกรณ์</label>
+                    <div id="equipmentList" class="space-y-3 max-h-60 overflow-y-auto">
+                        <?php
+                        $equipment = $pdo->query("SELECT e.*, c.name as category_name FROM equipment e JOIN categories c ON e.category_id = c.id WHERE e.quantity > 0 ORDER BY c.name, e.name")->fetchAll();
+                        foreach ($equipment as $item) {
+                            echo "
+                            <div class='flex items-center justify-between p-4 bg-gray-50 rounded-xl border border-gray-200'>
+                                <div class='flex items-center'>
+                                    <img src='Uploads/{$item['image']}' class='w-12 h-12 rounded-lg object-cover mr-4'>
+                                    <div>
+                                        <h4 class='font-semibold text-gray-800'>{$item['name']}</h4>
+                                        <p class='text-sm text-gray-600'>{$item['category_name']} • คงเหลือ: {$item['quantity']}</p>
+                                    </div>
+                                </div>
+                                <div class='flex items-center'>
+                                    <input type='number' name='equipment[{$item['id']}][quantity]' min='0' max='{$item['quantity']}' 
+                                        class='w-20 p-2 border border-gray-300 rounded-lg text-center' placeholder='0'>
+                                    <input type='hidden' name='equipment[{$item['id']}][id]' value='{$item['id']}'>
+                                </div>
+                            </div>";
+                        }
+                        ?>
+                    </div>
+                </div>
+                <div class="flex gap-3">
+                    <button type="button" onclick="toggleModal('borrowModal')" class="flex-1 py-3 bg-gray-200 text-gray-700 font-medium rounded-xl hover:bg-gray-300 transition-all">ยกเลิก</button>
+                    <button type="submit" name="borrow_equipment" class="flex-1 py-3 bg-gradient-to-r from-green-500 to-green-600 text-white font-bold rounded-xl hover:from-green-600 transition-all">ยืมอุปกรณ์</button>
+                </div>
+            </form>
         </div>
     </div>
 
@@ -1041,6 +1171,12 @@ if (isset($_POST['restore_borrowing'])) {
             });
         }
 
+        // Show Borrow Modal
+        function showBorrowModal() {
+            $('#borrowDate').val(new Date().toISOString().split('T')[0]);
+            toggleModal('borrowModal');
+        }
+
         // Show Trash Modal
         function showTrashModal() {
             toggleModal('trashModal');
@@ -1104,6 +1240,35 @@ if (isset($_POST['restore_borrowing'])) {
             <?php if ($alertScript): ?>
                 <?= $alertScript ?>
             <?php endif; ?>
+
+            // Handle borrow form submission with AJAX
+            $('#borrowForm').on('submit', function(e) {
+                e.preventDefault();
+                
+                const formData = new FormData(this);
+                
+                $.ajax({
+                    url: 'manage_borrowings.php',
+                    type: 'POST',
+                    data: formData,
+                    processData: false,
+                    contentType: false,
+                    dataType: 'json',
+                    success: function(response) {
+                        if (response.success) {
+                            Swal.fire('สำเร็จ', response.message, 'success').then(() => {
+                                toggleModal('borrowModal');
+                                loadBorrowings();
+                            });
+                        } else {
+                            Swal.fire('ข้อผิดพลาด', response.message, 'error');
+                        }
+                    },
+                    error: function() {
+                        Swal.fire('ข้อผิดพลาด', 'เกิดข้อผิดพลาดในการเชื่อมต่อ', 'error');
+                    }
+                });
+            });
         });
     </script>
 </body>
