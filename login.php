@@ -19,9 +19,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $_SESSION['role'] = $user['role'];
             $_SESSION['username'] = $user['username'];
             if ($user['role'] === 'admin') {
-                header('Location: admins');
+                header('Location: admins.php');
             } else {
-                header('Location: user_dashboard');
+                header('Location: user_dashboard.php');
             }
             exit;
         } else {
@@ -46,6 +46,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     
     <!-- Bootstrap Icons -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+    
+    <!-- jQuery Confirm CSS -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/jquery-confirm/3.3.4/jquery-confirm.min.css">
     
     <!-- Animate.css -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css"/>
@@ -109,5 +112,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             Equipment Borrowing System
         </div>
     </div>
+
+    <!-- jQuery -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <!-- jQuery Confirm JS -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery-confirm/3.3.4/jquery-confirm.min.js"></script>
+
+    <script>
+        <?php if ($error): ?>
+            $.alert({
+                title: 'เข้าสู่ระบบไม่สำเร็จ',
+                content: '<?php echo addslashes($error); ?>',
+                type: 'red',
+                theme: 'modern',
+                icon: 'bi bi-exclamation-triangle-fill'
+            });
+        <?php endif; ?>
+    </script>
 </body>
 </html>

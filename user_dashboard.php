@@ -3,7 +3,7 @@ session_start();
 require_once 'config.php';
 
 if (!isset($_SESSION['user_id']) || $_SESSION['role'] !== 'user') {
-    header('Location: login');
+    header('Location: login.php');
     exit;
 }
 
@@ -831,15 +831,32 @@ foreach ($borrowings as $b) {
             $.confirm({
                 title: 'ยืนยันการคืน',
                 content: 'คุณต้องการคืนอุปกรณ์รายการนี้ใช่หรือไม่?',
-                type: 'orange',
+                type: 'green',
                 theme: 'modern',
                 icon: 'bi bi-question-circle',
                 buttons: {
                     confirm: {
                         text: 'ยืนยัน',
-                        btnClass: 'btn-orange',
+                        btnClass: 'btn-green',
                         action: function () {
-                            window.location.href = '?return_borrowing=' + id;
+                            // AJAX return
+                            $.ajax({
+                                url: 'user_dashboard.php',
+                                type: 'GET',
+                                data: { return_borrowing: id },
+                                success: function(response) {
+                                    // Reload the page to update data
+                                    location.reload();
+                                },
+                                error: function() {
+                                    $.alert({
+                                        title: 'เกิดข้อผิดพลาด',
+                                        content: 'ไม่สามารถคืนอุปกรณ์ได้',
+                                        type: 'red',
+                                        theme: 'modern'
+                                    });
+                                }
+                            });
                         }
                     },
                     cancel: {
@@ -857,6 +874,23 @@ foreach ($borrowings as $b) {
     }
     $('#borrow_date').attr('min', now);
 });
+
+        // AJAX for borrow form
+        $('#borrowForm').on('submit', function(e) {
+            e.preventDefault();
+            $.ajax({
+                url: 'user_dashboard.php',
+                type: 'POST',
+                data: $(this).serialize(),
+                success: function(response) {
+                    location.reload();
+                },
+                error: function() {
+                    $.alert({ title: 'เกิดข้อผิดพลาด', content: 'ไม่สามารถยืมอุปกรณ์ได้', type: 'red', theme: 'modern' });
+                }
+            });
+        });
+
         $(document).ready(function() {
             <?php if ($alertScript): ?>
                 <?php echo $alertScript; ?>
